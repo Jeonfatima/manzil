@@ -1,0 +1,4 @@
+Our project is a Chat Application.
+Programming Language: Python
+Server Port: 5000
+Team Members: 4
