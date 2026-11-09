@@ -1,4 +1,5 @@
 Our project is a Chat Application.
 Programming Language: Python and FastAPI.
+Programming Language: Python and Next.js
 Server Port: 5000
 Team Members: 4
