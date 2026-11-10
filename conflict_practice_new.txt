@@ -1,3 +1,0 @@
-This file is created by Hunaiza.
-We are doing merge conflict practice.
-This is the original version.
