@@ -1,5 +1,10 @@
 from fastapi.testclient import TestClient
 from app.main import app
+from app.database import init_db
+from app.services.seed import seed_database
+
+init_db()
+seed_database()
 
 client = TestClient(app)
 

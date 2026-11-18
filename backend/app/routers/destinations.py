@@ -1,3 +1,4 @@
+import asyncio
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
@@ -13,30 +14,32 @@ router = APIRouter(prefix="/destinations", tags=["Destinations"])
 async def get_destinations(session: Session = Depends(get_session)):
     destinations = session.exec(select(Destination)).all()
     
-    result = []
-    for dest in destinations:
-        weather = await get_destination_weather(
-            dest.name, latitude=dest.latitude, longitude=dest.longitude
-        )
-        result.append(
-            {
-                "id": dest.id,
-                "name": dest.name,
-                "province": dest.province,
-                "avg_daily_budget_pkr": dest.avg_daily_budget_pkr,
-                "latitude": dest.latitude,
-                "longitude": dest.longitude,
-                "description": dest.description,
-                "image_url": dest.image_url,
-                "optimal_seasons": dest.optimal_seasons,
-                "best_hotels": dest.best_hotels,
-                "food_specialties": dest.food_specialties,
-                "popular_spots": dest.popular_spots,
-                "weather": weather,
-                "spot_rate": dest.spot_rate,
-            }
-        )
-    return result
+    async def get_dest_item(dest):
+        try:
+            weather = await get_destination_weather(
+                dest.name, latitude=dest.latitude, longitude=dest.longitude
+            )
+        except Exception:
+            weather = None
+        return {
+            "id": dest.id,
+            "name": dest.name,
+            "province": dest.province,
+            "avg_daily_budget_pkr": dest.avg_daily_budget_pkr,
+            "latitude": dest.latitude,
+            "longitude": dest.longitude,
+            "description": dest.description,
+            "image_url": dest.image_url,
+            "optimal_seasons": dest.optimal_seasons,
+            "best_hotels": dest.best_hotels,
+            "food_specialties": dest.food_specialties,
+            "popular_spots": dest.popular_spots,
+            "weather": weather,
+            "spot_rate": dest.spot_rate,
+        }
+
+    result = await asyncio.gather(*[get_dest_item(dest) for dest in destinations])
+    return list(result)
 
 @router.get("/{destination_id}", response_model=DestinationResponse)
 def get_destination(destination_id: int, session: Session = Depends(get_session)):
