@@ -1,7 +1,14 @@
 import json
 import re
+import asyncio
+import warnings
 from typing import Optional, Dict, Any, List
-import google.generativeai as genai
+
+# Suppress the FutureWarning for deprecated google-generativeai package
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", FutureWarning)
+    import google.generativeai as genai
+
 from app.config import settings
 
 STYLE_LABELS = {
@@ -85,29 +92,40 @@ async def generate_itinerary_ai(
     rates: Optional[Dict[str, Any]] = None,
 ) -> dict:
     if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your_free_gemini_api_key_here":
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            prompt = generate_itinerary_prompt(destination, days, budget, style, start_date, spots, rates)
-            response = model.generate_content(prompt)
-            clean_text = response.text.strip()
-            # Remove any markdown code fences if present
-            clean_text = re.sub(r"^```(?:json)?\s*", "", clean_text, flags=re.MULTILINE)
-            clean_text = re.sub(r"\s*```$", "", clean_text, flags=re.MULTILINE).strip()
-            parsed = json.loads(clean_text)
-            if "daily_plan" in parsed and isinstance(parsed["daily_plan"], list):
-                # Ensure cost_breakdown is present
-                if "cost_breakdown" not in parsed:
-                    daily_budget = budget / days
-                    parsed["cost_breakdown"] = {
-                        "stay_pkr": int(daily_budget * 0.4 * days),
-                        "meals_pkr": int(daily_budget * 0.25 * days),
-                        "transport_pkr": int(daily_budget * 0.25 * days),
-                        "activities_pkr": int(daily_budget * 0.1 * days),
-                        "total_estimated_pkr": int(budget),
-                    }
-                return parsed
-        except Exception as e:
-            print(f"Gemini generation failed, falling back to local regional engine: {e}")
+        prompt = generate_itinerary_prompt(destination, days, budget, style, start_date, spots, rates)
+        for model_name in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-pro"]:
+            try:
+                model = genai.GenerativeModel(model_name)
+
+                # Run blocking Gemini call in a thread with a 20-second timeout
+                # to prevent socket hang-up / ECONNRESET on slow or failed API calls
+                def _call_gemini():
+                    return model.generate_content(prompt)
+
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(_call_gemini),
+                    timeout=20.0
+                )
+
+                clean_text = response.text.strip()
+                # Remove any markdown code fences if present
+                clean_text = re.sub(r"^```(?:json)?\s*", "", clean_text, flags=re.MULTILINE)
+                clean_text = re.sub(r"\s*```$", "", clean_text, flags=re.MULTILINE).strip()
+                parsed = json.loads(clean_text)
+                if "daily_plan" in parsed and isinstance(parsed["daily_plan"], list):
+                    # Ensure cost_breakdown is present
+                    if "cost_breakdown" not in parsed:
+                        daily_budget = budget / days
+                        parsed["cost_breakdown"] = {
+                            "stay_pkr": int(daily_budget * 0.4 * days),
+                            "meals_pkr": int(daily_budget * 0.25 * days),
+                            "transport_pkr": int(daily_budget * 0.25 * days),
+                            "activities_pkr": int(daily_budget * 0.1 * days),
+                            "total_estimated_pkr": int(budget),
+                        }
+                    return parsed
+            except (asyncio.TimeoutError, Exception):
+                continue
 
     # Grounded Regional Fallback Engine using database rates
     label = STYLE_LABELS.get(style, style)
@@ -193,20 +211,28 @@ async def generate_itinerary_ai(
     }
 
 async def answer_musafir_query(query: str, context: str = "") -> str:
-    # 1. If real Gemini API key is configured in backend/.env, call Google Gemini 1.5 Flash
+    # 1. If real Gemini API key is configured in backend/.env, call Google Gemini
     if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY.strip() and settings.GEMINI_API_KEY != "your_free_gemini_api_key_here":
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            prompt = f"""You are Musafir.ai, an elite Pakistani travel assistant and mountaineering guide for Northern Pakistan.
+        prompt = f"""You are Musafir.ai, an elite Pakistani travel assistant and mountaineering guide for Northern Pakistan.
 Answer warmly, professionally, and accurately in English with a touch of Urdu hospitality (Assalam-o-Alaikum, Insha'Allah, etc.).
 Provide realistic, detailed advice on routes, famous spots, mountain roads, local seasons, hotels, safety, and Pakistani Rupee (PKR) budgeting.
 Destination Context: {context}
 User Query: {query}"""
-            res = model.generate_content(prompt)
-            if res.text and res.text.strip():
-                return res.text.strip()
-        except Exception as e:
-            print(f"Musafir query generation failed, using intelligent local engine: {e}")
+        for model_name in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-pro"]:
+            try:
+                model = genai.GenerativeModel(model_name)
+
+                def _call_gemini_chat():
+                    return model.generate_content(prompt)
+
+                res = await asyncio.wait_for(
+                    asyncio.to_thread(_call_gemini_chat),
+                    timeout=20.0
+                )
+                if res.text and res.text.strip():
+                    return res.text.strip()
+            except (asyncio.TimeoutError, Exception):
+                continue
 
     # 2. Rich Local Travel Intelligence Engine (instant offline answers for all regions and questions)
     q = query.lower()

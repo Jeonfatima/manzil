@@ -1,5 +1,9 @@
+import time
 import httpx
 from app.config import settings
+
+_WEATHER_CACHE = {}
+_CACHE_TTL = 300  # 5 minutes
 
 FALLBACK_WEATHER = {
     "Hunza Valley": {"temp": 16, "condition": "Sunny", "forecast": [{"day": "Tomorrow", "temp": 18, "condition": "Clear"}, {"day": "Day 3", "temp": 14, "condition": "Partly Cloudy"}]},
@@ -14,11 +18,18 @@ async def get_destination_weather(destination_name: str, latitude: float = None,
     using the stored destination coordinates (falls back to place-name lookup).
     Falls back to intelligent regional mock data if API key is missing or request fails.
     """
+    cache_key = f"{destination_name}_{latitude}_{longitude}"
+    now = time.time()
+    if cache_key in _WEATHER_CACHE:
+        cached_time, cached_val = _WEATHER_CACHE[cache_key]
+        if now - cached_time < _CACHE_TTL:
+            return cached_val
+
     api_key = settings.OPENWEATHER_API_KEY
     
     if api_key and api_key.strip():
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=3.0) as client:
                 params = {}
                 if latitude is not None and longitude is not None:
                     params["lat"] = latitude
@@ -67,16 +78,18 @@ async def get_destination_weather(destination_name: str, latitude: float = None,
                             {"day": "Day 3", "temp": temp - 1, "condition": "Clear"}
                         ]
 
-                    return {
+                    res = {
                         "temp": temp,
                         "condition": condition,
                         "forecast": forecast_list
                     }
-        except Exception as e:
-            print(f"Weather API Error: {e}")
+                    _WEATHER_CACHE[cache_key] = (now, res)
+                    return res
+        except Exception:
+            pass
 
     # Fallback dictionary if no API key or network error occurs
-    return FALLBACK_WEATHER.get(destination_name, {
+    fallback = FALLBACK_WEATHER.get(destination_name, {
         "temp": 20, 
         "condition": "Pleasant", 
         "forecast": [
@@ -84,3 +97,5 @@ async def get_destination_weather(destination_name: str, latitude: float = None,
             {"day": "Day 3", "temp": 19, "condition": "Clear"}
         ]
     })
+    _WEATHER_CACHE[cache_key] = (now, fallback)
+    return fallback
